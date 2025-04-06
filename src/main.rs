@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::{env, fmt, fs, usize};
+use std::{env, fmt, fs};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -42,10 +42,10 @@ impl fmt::Display for HttpResponseCode {
 
 #[derive(Debug)]
 enum ReqType {
-    GET,
-    POST,
-    OPTIONS,
-    CONNECT,
+    Get,
+    Post,
+    Options,
+    Connect,
 }
 
 impl FromStr for ReqType {
@@ -53,10 +53,10 @@ impl FromStr for ReqType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "GET" => Ok(Self::GET),
-            "POST" => Ok(Self::POST),
-            "OPTIONS" => Ok(Self::OPTIONS),
-            "CONNECT" => Ok(Self::CONNECT),
+            "GET" => Ok(Self::Get),
+            "POST" => Ok(Self::Post),
+            "OPTIONS" => Ok(Self::Options),
+            "CONNECT" => Ok(Self::Connect),
             _ => Err(ReqTypeParseError),
         }
     }
@@ -152,8 +152,8 @@ impl Request {
 
         let mut req_accept_encoding: Vec<MessageEncoding> = vec![];
 
-        for i in 1..(split_data.len() - 2) {
-            let header_data: Vec<&str> = split_data[i].split(": ").collect();
+        for item in split_data.iter().take(split_data.len() - 2).skip(1) {
+            let header_data: Vec<&str> = item.split(": ").collect();
 
             if header_data.len() != 2 {
                 continue;
@@ -177,7 +177,7 @@ impl Request {
 
         let body_split: Vec<&str> = data.split("\r\n\r\n").collect();
         let req_body: String = if body_split.len() > 1 {
-            String::from(body_split[1..].join("\r\n\r\n"))
+            body_split[1..].join("\r\n\r\n")
         } else {
             String::from("")
         };
@@ -244,24 +244,23 @@ fn extract_path_from_req_target(req_target: &str) -> Result<String, String> {
                 .take_while(|s| !s.is_empty())
                 .collect();
 
-            if parts.len() < min_req_len {
-                return Err(String::from("Invalid Request Form Target"));
-            } else if parts.len() == min_req_len {
-                return Ok(String::from("/"));
-            }
+            match parts.len().cmp(&min_req_len) {
+                std::cmp::Ordering::Less => Err(String::from("Invalid Request Form Target")),
+                std::cmp::Ordering::Equal => Ok(String::from("/")),
+                std::cmp::Ordering::Greater => {
+                    let mut path_parts: Vec<&str> = vec![""];
 
-            let mut path_parts: Vec<&str> = vec![""];
+                    for part in parts.iter().skip(min_req_len) {
+                        path_parts.push(part);
+                    }
 
-            for i in min_req_len..parts.len() {
-                path_parts.push(parts[i]);
+                    Ok(path_parts.join("/"))
+                }
             }
-            return Ok(path_parts.join("/"));
         }
         RequestTargetForms::Asterisk => Ok(String::from("*")),
     }
 }
-
-// fn extract
 
 enum ContentType {
     TextPlain,
@@ -318,7 +317,7 @@ impl Response {
             (Some(body), Some(MessageEncoding::Gzip)) => {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
 
-                if let Err(_) = encoder.write_all(body.as_bytes()) {
+                if encoder.write_all(body.as_bytes()).is_err() {
                     (body.as_bytes().to_vec(), body.len())
                 } else {
                     match encoder.finish() {
@@ -344,10 +343,9 @@ impl Response {
         self.headers.iter().for_each(|a| {
             lines.push(format!("{}\r\n", [a.0.as_str(), a.1.as_str()].join(": ")));
         });
-        match &self.content_encoding {
-            Some(e) => lines.push(format!("Content-Encoding: {}\r\n", e)),
-            None => (),
-        };
+        if let Some(e) = &self.content_encoding {
+            lines.push(format!("Content-Encoding: {}\r\n", e));
+        }
         lines.push(format!("Content-Length: {}\r\n", body_len));
 
         lines.push(String::from("\r\n"));
@@ -431,7 +429,7 @@ fn handle_connecttion(mut stream: TcpStream, files_dir: &String) {
         let file_path: String = format!("{}/{}", files_dir, req.path.split_at(7).1);
 
         match req.req_type {
-            ReqType::GET => {
+            ReqType::Get => {
                 let file_content = fs::read_to_string(file_path);
                 match file_content {
                     Ok(content) => respond(
@@ -446,7 +444,7 @@ fn handle_connecttion(mut stream: TcpStream, files_dir: &String) {
                     Err(_) => respond_with_default_msg(stream, &req, HttpResponseCode::R404),
                 };
             }
-            ReqType::POST => {
+            ReqType::Post => {
                 let _: Result<(), std::io::Error> = fs::create_dir_all(files_dir);
 
                 let is_file_written: Result<(), std::io::Error> = fs::write(file_path, &req.body);
@@ -463,8 +461,8 @@ fn handle_connecttion(mut stream: TcpStream, files_dir: &String) {
                     Err(_) => respond_with_default_msg(stream, &req, HttpResponseCode::R404),
                 }
             }
-            ReqType::OPTIONS => (),
-            ReqType::CONNECT => (),
+            ReqType::Options => (),
+            ReqType::Connect => (),
         };
     } else {
         respond_with_default_msg(stream, &req, HttpResponseCode::R404);
