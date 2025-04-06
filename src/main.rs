@@ -144,8 +144,7 @@ impl Request {
         }
 
         let req_type: ReqType = ReqType::from_str(req_info_split[0]).map_err(|e| e.to_string())?;
-        let req_target: String = extract_path_from_req_target(req_info_split[1])
-            .expect("Failed to Extract Path from Request Target");
+        let req_target: String = extract_path_from_req_target(req_info_split[1])?;
         let req_protocol: String = String::from(req_info_split[2]);
 
         let mut req_headers: HashMap<String, String> = HashMap::new();
@@ -192,16 +191,7 @@ impl Request {
         })
     }
 
-    fn has_header(&self, header_key: &str) -> bool {
-        self.headers
-            .contains_key(header_key.to_lowercase().as_str())
-    }
-
     fn header_val(&self, header_key: &str) -> Option<&String> {
-        if !self.has_header(header_key) {
-            return None;
-        }
-
         self.headers.get(header_key.to_lowercase().as_str())
     }
 }
@@ -285,6 +275,16 @@ struct Response {
 }
 
 impl Response {
+    fn empty(code: HttpResponseCode) -> Response {
+        Response {
+            body: None,
+            code,
+            content_encoding: None,
+            headers: HashMap::new(),
+            protocol: String::from("HTTP/1.1"),
+        }
+    }
+
     fn new(
         req: &Request,
         code: HttpResponseCode,
@@ -362,9 +362,20 @@ fn respond_success(stream: TcpStream, req: &Request) {
 }
 
 fn respond(stream: TcpStream, response: Response) {
-    response
-        .write_to(stream)
-        .expect("Failed to write to stream");
+    match response.write_to(&stream) {
+        Ok(_) => {}
+        Err(e) => match e.kind() {
+            std::io::ErrorKind::BrokenPipe => {
+                println!("Client disconnected during response");
+            }
+            std::io::ErrorKind::ConnectionReset => {
+                println!("Connection reset by client");
+            }
+            _ => {
+                eprintln!("ERROR: Failed to write response: {}", e);
+            }
+        },
+    }
 }
 
 fn respond_with_default_msg(stream: TcpStream, req: &Request, code: HttpResponseCode) {
@@ -381,91 +392,102 @@ fn respond_bad_request(stream: TcpStream, req: &Request) {
     );
 }
 
-fn handle_connecttion(mut stream: TcpStream, files_dir: &String) {
+fn handle_connection(mut stream: TcpStream, files_dir: &String) {
     println!("accepted new connection");
-    let mut read_buf: [u8; 1024] = [0; 1024];
-    let bytes_read: usize = stream.read(&mut read_buf).expect("Failed to Read");
-    let read_data: &str =
-        std::str::from_utf8(&read_buf[..bytes_read]).expect("Failed to Convert to String");
+    let mut read_data: String = String::new();
+    let bytes_read = match stream.read_to_string(&mut read_data) {
+        Ok(n) => n,
+        Err(_) => {
+            println!("EOROROR");
+            return respond(stream, Response::empty(HttpResponseCode::R400));
+        }
+    };
 
     println!("read {} bytes", bytes_read);
     println!("data:\n{}", read_data);
 
-    let req: Request = Request::new(read_data).expect("Error Parsing Request");
+    match Request::new(read_data.as_str()) {
+        Err(_) => respond(stream, Response::empty(HttpResponseCode::R404)),
+        Ok(req) => {
+            println!("Request: {:?}", req);
 
-    println!("Request: {:?}", req);
-
-    if req.path == "/" {
-        respond_success(stream, &req);
-    } else if req.path.starts_with("/echo/") {
-        if req.path == "/echo/" {
-            respond_bad_request(stream, &req);
-        } else {
-            respond(
-                stream,
-                Response::new(
-                    &req,
-                    HttpResponseCode::R200,
-                    Some(String::from(req.path.split_at(6).1)),
-                    ContentType::TextPlain,
-                ),
-            );
-        }
-    } else if req.path == "/user-agent" {
-        if req.has_header("User-Agent") {
-            respond(
-                stream,
-                Response::new(
-                    &req,
-                    HttpResponseCode::R200,
-                    Some(req.header_val("User-Agent").unwrap().clone()),
-                    ContentType::TextPlain,
-                ),
-            );
-        } else {
-            respond_bad_request(stream, &req);
-        }
-    } else if req.path.starts_with("/files/") {
-        let file_path: String = format!("{}/{}", files_dir, req.path.split_at(7).1);
-
-        match req.req_type {
-            ReqType::Get => {
-                let file_content = fs::read_to_string(file_path);
-                match file_content {
-                    Ok(content) => respond(
+            if req.path == "/" {
+                respond_success(stream, &req);
+            } else if req.path.starts_with("/echo/") {
+                if req.path == "/echo/" {
+                    respond_bad_request(stream, &req);
+                } else {
+                    respond(
                         stream,
                         Response::new(
                             &req,
                             HttpResponseCode::R200,
-                            Some(content),
-                            ContentType::ApplicationOctectStream,
+                            Some(String::from(req.path.split_at(6).1)),
+                            ContentType::TextPlain,
                         ),
-                    ),
-                    Err(_) => respond_with_default_msg(stream, &req, HttpResponseCode::R404),
-                };
-            }
-            ReqType::Post => {
-                let _: Result<(), std::io::Error> = fs::create_dir_all(files_dir);
-
-                let is_file_written: Result<(), std::io::Error> = fs::write(file_path, &req.body);
-                match is_file_written {
-                    Ok(_) => respond(
+                    );
+                }
+            } else if req.path == "/user-agent" {
+                match req.header_val("User-Agent") {
+                    Some(header_val) => respond(
                         stream,
                         Response::new(
                             &req,
-                            HttpResponseCode::R201,
-                            None,
-                            ContentType::ApplicationOctectStream,
+                            HttpResponseCode::R200,
+                            Some(header_val.clone()),
+                            ContentType::TextPlain,
                         ),
                     ),
-                    Err(_) => respond_with_default_msg(stream, &req, HttpResponseCode::R404),
-                }
+                    None => respond_bad_request(stream, &req),
+                };
+            } else if req.path.starts_with("/files/") {
+                let file_path: String = format!("{}/{}", files_dir, req.path.split_at(7).1);
+
+                match req.req_type {
+                    ReqType::Get => {
+                        let file_content = fs::read_to_string(file_path);
+                        match file_content {
+                            Ok(content) => respond(
+                                stream,
+                                Response::new(
+                                    &req,
+                                    HttpResponseCode::R200,
+                                    Some(content),
+                                    ContentType::ApplicationOctectStream,
+                                ),
+                            ),
+                            Err(_) => {
+                                respond_with_default_msg(stream, &req, HttpResponseCode::R404)
+                            }
+                        };
+                    }
+                    ReqType::Post => {
+                        let _: Result<(), std::io::Error> = fs::create_dir_all(files_dir);
+
+                        let is_file_written: Result<(), std::io::Error> =
+                            fs::write(file_path, &req.body);
+                        match is_file_written {
+                            Ok(_) => respond(
+                                stream,
+                                Response::new(
+                                    &req,
+                                    HttpResponseCode::R201,
+                                    None,
+                                    ContentType::ApplicationOctectStream,
+                                ),
+                            ),
+                            Err(_) => {
+                                respond_with_default_msg(stream, &req, HttpResponseCode::R404)
+                            }
+                        }
+                    }
+                    ReqType::Options => (),
+                    ReqType::Connect => (),
+                };
+            } else {
+                respond_with_default_msg(stream, &req, HttpResponseCode::R404);
             }
-            ReqType::Options => (),
-            ReqType::Connect => (),
-        };
-    } else {
-        respond_with_default_msg(stream, &req, HttpResponseCode::R404);
+        }
     }
 }
 
@@ -481,18 +503,23 @@ fn main() {
 
     let files_dir: Arc<String> = Arc::new(files_dir);
 
-    let listener: TcpListener = TcpListener::bind("127.0.0.1:2000").unwrap();
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let files_dir = Arc::clone(&files_dir);
-                std::thread::spawn(move || handle_connecttion(stream, &files_dir));
-                // handle_connecttion(stream);
-            }
-            Err(e) => {
-                println!("error: {}", e);
+    match TcpListener::bind("127.0.0.1:2000") {
+        Ok(listener) => {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let files_dir = Arc::clone(&files_dir);
+                        std::thread::spawn(move || handle_connection(stream, &files_dir));
+                        // handle_connecttion(stream);
+                    }
+                    Err(e) => {
+                        println!("error: {}", e);
+                    }
+                }
             }
         }
-    }
+        Err(e) => {
+            println!("Failed to establish a TCP Listener. Error:\n{}", e);
+        }
+    };
 }
