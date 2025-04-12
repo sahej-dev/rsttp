@@ -53,22 +53,36 @@ impl fmt::Display for ContentType {
     }
 }
 
-pub struct Response<'a> {
-    protocol: &'a HttpProtocol,
+pub struct Response {
+    protocol: HttpProtocol,
     code: HttpResponseCode,
     headers: HashMap<String, String>,
     body: Option<String>,
     content_encoding: Option<MessageEncoding>,
+    content_type: ContentType,
 }
 
-impl<'a> Response<'a> {
-    pub fn empty_http11(code: HttpResponseCode) -> Response<'a> {
+impl Response {
+    pub fn success() -> Response {
+        Response::default_message(HttpResponseCode::R200)
+    }
+
+    pub fn bad_request() -> Response {
+        Response::default_message(HttpResponseCode::R400)
+    }
+
+    pub fn not_found() -> Response {
+        Response::default_message(HttpResponseCode::R404)
+    }
+
+    pub fn default_message(code: HttpResponseCode) -> Response {
         Response {
             body: None,
             code,
             content_encoding: None,
             headers: HashMap::new(),
-            protocol: &HttpProtocol::Http11,
+            protocol: HttpProtocol::Http11,
+            content_type: ContentType::TextPlain,
         }
     }
 
@@ -77,26 +91,23 @@ impl<'a> Response<'a> {
         code: HttpResponseCode,
         body: Option<String>,
         content_type: ContentType,
-        protocol: &'a HttpProtocol,
-    ) -> Response<'a> {
-        let mut response = Response {
+        protocol: HttpProtocol,
+    ) -> Response {
+        Response {
             protocol,
             code,
             headers: HashMap::new(),
             body,
+            content_type,
             content_encoding: if req.accept_encodings.is_empty() {
                 None
             } else {
                 Some(req.accept_encodings[0].clone())
             },
-        };
-
-        response.set_header(String::from("Content-Type"), content_type.to_string());
-
-        response
+        }
     }
 
-    fn set_header(&mut self, key: String, value: String) {
+    pub fn set_header(&mut self, key: String, value: String) {
         self.headers.insert(key, value);
     }
 
@@ -131,6 +142,7 @@ impl<'a> Response<'a> {
         self.headers.iter().for_each(|a| {
             lines.push(format!("{}\r\n", [a.0.as_str(), a.1.as_str()].join(": ")));
         });
+        lines.push(format!("Content-Type: {}\r\n", self.content_type));
         if let Some(e) = &self.content_encoding {
             lines.push(format!("Content-Encoding: {}\r\n", e));
         }

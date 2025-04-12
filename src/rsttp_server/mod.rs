@@ -1,28 +1,30 @@
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-pub mod listener;
+// mod listener;
 
-pub use listener::*;
+use crate::http::{Request, Response};
 
 pub struct RsttpServer {
     pub addr: String,
     pub files_dir: Arc<String>,
-    pub handler: fn(TcpStream, &String),
+    pub handler: fn(Request, &String) -> Response,
 }
 
 impl RsttpServer {
-    pub fn listen(&self) {
-        match TcpListener::bind(&self.addr) {
+    pub fn listen(self: Arc<Self>) {
+        match TcpListener::bind(self.addr_as_string()) {
             Ok(listener) => {
                 for stream in listener.incoming() {
+                    let server: Arc<RsttpServer> = Arc::clone(&self);
+                    let files_dir: Arc<String> = Arc::clone(&self.files_dir);
+
                     match stream {
                         Ok(stream) => {
-                            let files_dir: Arc<String> = Arc::clone(&self.files_dir);
-                            let handler: fn(TcpStream, &String) = self.handler;
-
-                            std::thread::spawn(move || (handler)(stream, &files_dir));
-                            // handle_connecttion(stream);
+                            std::thread::spawn(move || {
+                                server.tcp_event_handler(&stream, &files_dir);
+                            });
                         }
                         Err(e) => {
                             println!("error: {}", e);
@@ -36,7 +38,48 @@ impl RsttpServer {
         }
     }
 
-    pub fn addr_as_string(&self) -> String {
-        String::from(&self.addr)
+    pub fn addr_as_string(&self) -> &String {
+        &self.addr
+    }
+
+    fn respond(stream: &TcpStream, response: Response) {
+        match response.write_to(stream) {
+            Ok(_) => {}
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::BrokenPipe => {
+                    println!("Client disconnected during response");
+                }
+                std::io::ErrorKind::ConnectionReset => {
+                    println!("Connection reset by client");
+                }
+                _ => {
+                    eprintln!("ERROR: Failed to write response: {}", e);
+                }
+            },
+        }
+    }
+
+    fn tcp_event_handler(&self, stream: &TcpStream, files_dir: &String) {
+        println!("accepted new connection");
+        let req = match self.get_request_from_stream(stream) {
+            Ok(req) => req,
+            Err(_) => {
+                RsttpServer::respond(stream, Response::bad_request());
+                return;
+            }
+        };
+
+        let response = (self.handler)(req, files_dir);
+        RsttpServer::respond(stream, response);
+    }
+
+    fn get_request_from_stream(&self, mut stream: &TcpStream) -> Result<Request, String> {
+        let mut read_data: [u8; 8192] = [0; 8192];
+        let bytes_read = stream.read(&mut read_data).map_err(|e| e.to_string())?;
+
+        let read_data: &str =
+            std::str::from_utf8(&read_data[..bytes_read]).map_err(|e| e.to_string())?;
+
+        Request::new(read_data).map_err(|e| e.to_string())
     }
 }
