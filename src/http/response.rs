@@ -5,7 +5,7 @@ use std::io::Write;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use super::{MessageEncoding, Request};
+use super::{AcceptedEncoding, Request, header::HttpHeader};
 use crate::config::HttpProtocol;
 
 pub enum HttpResponseCode {
@@ -53,12 +53,22 @@ impl fmt::Display for ContentType {
     }
 }
 
+impl HttpHeader for ContentType {
+    fn key(&self) -> &str {
+        "Content-Type"
+    }
+
+    fn val(&self) -> String {
+        self.to_string()
+    }
+}
+
 pub struct Response {
     protocol: HttpProtocol,
     code: HttpResponseCode,
     headers: HashMap<String, String>,
     body: Option<String>,
-    content_encoding: Option<MessageEncoding>,
+    content_encoding: Option<AcceptedEncoding>,
     content_type: ContentType,
 }
 
@@ -107,13 +117,9 @@ impl Response {
         }
     }
 
-    pub fn set_header(&mut self, key: String, value: String) {
-        self.headers.insert(key, value);
-    }
-
     pub fn write_to<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
         let (body_bytes, body_len) = match (&self.body, &self.content_encoding) {
-            (Some(body), Some(MessageEncoding::Gzip)) => {
+            (Some(body), Some(AcceptedEncoding::Gzip)) => {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
 
                 if encoder.write_all(body.as_bytes()).is_err() {
@@ -142,9 +148,9 @@ impl Response {
         self.headers.iter().for_each(|a| {
             lines.push(format!("{}\r\n", [a.0.as_str(), a.1.as_str()].join(": ")));
         });
-        lines.push(format!("Content-Type: {}\r\n", self.content_type));
+        lines.push(self.content_type.in_raw_http_form());
         if let Some(e) = &self.content_encoding {
-            lines.push(format!("Content-Encoding: {}\r\n", e));
+            lines.push(e.in_raw_http_form());
         }
         lines.push(format!("Content-Length: {}\r\n", body_len));
 

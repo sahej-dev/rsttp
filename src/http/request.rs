@@ -2,6 +2,8 @@ use std::{collections::HashMap, error::Error, fmt, str::FromStr};
 
 use crate::config::HttpProtocol;
 
+use super::header::HttpHeader;
+
 #[derive(Debug)]
 pub enum ReqType {
     Get,
@@ -35,33 +37,35 @@ impl fmt::Display for ReqTypeParseError {
 
 impl Error for ReqTypeParseError {}
 
-#[derive(Debug, PartialEq)]
-pub enum MessageEncoding {
+#[derive(Debug, Clone, PartialEq)]
+pub enum AcceptedEncoding {
     Gzip,
 }
 
-impl Clone for MessageEncoding {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Gzip => Self::Gzip,
-        }
+impl HttpHeader for AcceptedEncoding {
+    fn key(&self) -> &str {
+        "Accept-Encoding"
+    }
+
+    fn val(&self) -> String {
+        self.to_string()
     }
 }
 
-impl fmt::Display for MessageEncoding {
+impl fmt::Display for AcceptedEncoding {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            MessageEncoding::Gzip => write!(f, "gzip"),
+            AcceptedEncoding::Gzip => write!(f, "gzip"),
         }
     }
 }
 
-impl FromStr for MessageEncoding {
+impl FromStr for AcceptedEncoding {
     type Err = MessageEncodingParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "gzip" => Ok(MessageEncoding::Gzip),
+            "gzip" => Ok(AcceptedEncoding::Gzip),
             _ => Err(MessageEncodingParseError),
         }
     }
@@ -85,7 +89,7 @@ pub struct Request {
     pub protocol: HttpProtocol,
     pub headers: HashMap<String, String>,
     pub body: String,
-    pub accept_encodings: Vec<MessageEncoding>,
+    pub accept_encodings: Vec<AcceptedEncoding>,
 }
 
 impl Request {
@@ -112,7 +116,7 @@ impl Request {
 
         let mut req_headers: HashMap<String, String> = HashMap::new();
 
-        let mut req_accept_encoding: Vec<MessageEncoding> = vec![];
+        let mut req_accept_encoding: Vec<AcceptedEncoding> = vec![];
 
         for item in split_data.iter().take(split_data.len() - 2).skip(1) {
             let header_data: Vec<&str> = item.split(": ").collect();
@@ -128,7 +132,7 @@ impl Request {
                     .filter(|e| !e.is_empty());
 
                 for encoding in encodings {
-                    if let Ok(e) = MessageEncoding::from_str(encoding) {
+                    if let Ok(e) = AcceptedEncoding::from_str(encoding) {
                         req_accept_encoding.push(e);
                     }
                 }
