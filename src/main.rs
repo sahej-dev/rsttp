@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::{env, fs};
 
+use config::Config;
 use http::{ContentType, HttpResponseCode, ReqType, Request, Response};
 use rsttp_server::RsttpServer;
 
@@ -86,11 +87,13 @@ fn main() {
         default_file_dir
     };
 
-    let files_dir: Arc<String> = Arc::new(files_dir);
+    // let files_dir: Arc<String> = Arc::new(files_dir);
 
     let server: RsttpServer = RsttpServer {
-        addr: String::from("127.0.0.1:2000"),
-        files_dir,
+        config: Config {
+            port: 2000,
+            static_files_dir: files_dir,
+        },
         handler: handle_connection,
     };
 

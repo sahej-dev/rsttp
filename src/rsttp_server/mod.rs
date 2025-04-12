@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 // mod listener;
 
+use crate::config::Config;
 use crate::http::{Request, Response};
 
 pub struct RsttpServer {
-    pub addr: String,
-    pub files_dir: Arc<String>,
+    pub config: Config,
     pub handler: fn(Request, &String) -> Response,
 }
 
@@ -18,12 +18,11 @@ impl RsttpServer {
             Ok(listener) => {
                 for stream in listener.incoming() {
                     let server: Arc<RsttpServer> = Arc::clone(&self);
-                    let files_dir: Arc<String> = Arc::clone(&self.files_dir);
 
                     match stream {
                         Ok(stream) => {
                             std::thread::spawn(move || {
-                                server.tcp_event_handler(&stream, &files_dir);
+                                server.tcp_event_handler(&stream, &server);
                             });
                         }
                         Err(e) => {
@@ -38,8 +37,8 @@ impl RsttpServer {
         }
     }
 
-    pub fn addr_as_string(&self) -> &String {
-        &self.addr
+    pub fn addr_as_string(&self) -> String {
+        self.config.addr()
     }
 
     fn respond(stream: &TcpStream, response: Response) {
@@ -59,7 +58,7 @@ impl RsttpServer {
         }
     }
 
-    fn tcp_event_handler(&self, stream: &TcpStream, files_dir: &String) {
+    fn tcp_event_handler(&self, stream: &TcpStream, server: &RsttpServer) {
         println!("accepted new connection");
         let req = match self.get_request_from_stream(stream) {
             Ok(req) => req,
@@ -69,7 +68,7 @@ impl RsttpServer {
             }
         };
 
-        let response = (self.handler)(req, files_dir);
+        let response = (self.handler)(req, &server.config.static_files_dir);
         RsttpServer::respond(stream, response);
     }
 
