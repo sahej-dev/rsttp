@@ -2,34 +2,23 @@ use std::sync::Arc;
 use std::{env, fs};
 
 use config::Config;
-use http::{ContentType, HttpResponseCode, ReqType, Request, Response};
+use http::{ContentType, HttpResponseCode, Response};
+use router::Router;
+use router::path::PathParseError;
 use rsttp_server::RsttpServer;
 
 mod config;
 mod http;
+mod router;
 mod rsttp_server;
 
-fn handle_connection(req: Request, files_dir: &String) -> Response {
-    println!("Request: {:?}", req);
+fn setup_routes(router: &mut Router<AppContext>) -> Result<(), PathParseError> {
+    router.get("/", |_req, _, _| Response::success())?;
 
-    if req.path == "/" {
-        Response::success()
-    } else if req.path.starts_with("/echo/") {
-        if req.path == "/echo/" {
-            Response::bad_request()
-        } else {
-            Response::new(
-                &req,
-                HttpResponseCode::R200,
-                Some(String::from(req.path.split_at(6).1)),
-                ContentType::TextPlain,
-                req.protocol,
-            )
-        }
-    } else if req.path == "/user-agent" {
+    router.get("/user-agent", |req, _, _| {
         match req.header_val("User-Agent") {
             Some(header_val) => Response::new(
-                &req,
+                req,
                 HttpResponseCode::R200,
                 Some(header_val.clone()),
                 ContentType::TextPlain,
@@ -37,47 +26,73 @@ fn handle_connection(req: Request, files_dir: &String) -> Response {
             ),
             None => Response::bad_request(),
         }
-    } else if req.path.starts_with("/files/") {
-        let file_path: String = format!("{}/{}", files_dir, req.path.split_at(7).1);
+    })?;
 
-        match req.req_type {
-            ReqType::Get => {
-                let file_content = fs::read_to_string(file_path);
-                match file_content {
-                    Ok(content) => Response::new(
-                        &req,
-                        HttpResponseCode::R200,
-                        Some(content),
-                        ContentType::ApplicationOctectStream,
-                        req.protocol,
-                    ),
-                    Err(_) => Response::not_found(),
-                }
-            }
-            ReqType::Post => {
-                let _: Result<(), std::io::Error> = fs::create_dir_all(files_dir);
-
-                let is_file_written: Result<(), std::io::Error> = fs::write(file_path, &req.body);
-                match is_file_written {
-                    Ok(_) => Response::new(
-                        &req,
-                        HttpResponseCode::R201,
-                        None,
-                        ContentType::ApplicationOctectStream,
-                        req.protocol,
-                    ),
-                    Err(_) => Response::not_found(),
-                }
-            }
-            ReqType::Options => todo!(),
-            ReqType::Connect => todo!(),
+    router.get("/echo/:text", |req, params, _| {
+        if let Some(text) = params.and_then(|p| p.get("text").map(|s| s.to_owned())) {
+            Response::new(
+                req,
+                HttpResponseCode::R200,
+                Some(text),
+                ContentType::TextPlain,
+                req.protocol,
+            )
+        } else {
+            Response::bad_request()
         }
-    } else {
-        Response::not_found()
-    }
+    })?;
+
+    router.get("/files/:path", |req, params, ctx| {
+        if let Some(path) = params.and_then(|p| p.get("path").map(|s| s.to_owned())) {
+            let file_path: String = format!("{}/{}", ctx.static_files_dir, path);
+            let file_content = fs::read_to_string(file_path);
+            match file_content {
+                Ok(content) => Response::new(
+                    req,
+                    HttpResponseCode::R200,
+                    Some(content),
+                    ContentType::ApplicationOctectStream,
+                    req.protocol,
+                ),
+                Err(_) => Response::not_found(),
+            }
+        } else {
+            Response::bad_request()
+        }
+    })?;
+
+    router.post("/files/:path", |req, params, ctx| {
+        if let Some(path) = params.and_then(|p| p.get("path").map(|s| s.to_owned())) {
+            let file_path: String = format!("{}/{}", ctx.static_files_dir, path);
+            let _: Result<(), std::io::Error> = fs::create_dir_all(&ctx.static_files_dir);
+
+            let is_file_written: Result<(), std::io::Error> = fs::write(file_path, &req.body);
+            match is_file_written {
+                Ok(_) => Response::new(
+                    req,
+                    HttpResponseCode::R201,
+                    None,
+                    ContentType::ApplicationOctectStream,
+                    req.protocol,
+                ),
+                Err(_) => Response::not_found(),
+            }
+        } else {
+            Response::bad_request()
+        }
+    })?;
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct AppContext {
+    static_files_dir: String,
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let default_file_dir: String = String::from("files/");
     let args: Vec<String> = env::args().collect();
 
@@ -87,17 +102,19 @@ fn main() {
         default_file_dir
     };
 
-    // let files_dir: Arc<String> = Arc::new(files_dir);
-
-    let server: RsttpServer = RsttpServer {
-        config: Config {
-            port: 2000,
-            static_files_dir: files_dir,
-        },
-        handler: handle_connection,
+    let ctx: AppContext = AppContext {
+        static_files_dir: files_dir,
     };
 
-    let server: Arc<RsttpServer> = Arc::new(server);
+    let config: Config<AppContext> = Config { port: 2000, ctx };
+
+    let mut router: Router<AppContext> = Router::new();
+
+    let _ = setup_routes(&mut router);
+
+    let server: RsttpServer<AppContext> = RsttpServer { config, router };
+
+    let server: Arc<RsttpServer<AppContext>> = Arc::new(server);
 
     server.listen();
 }

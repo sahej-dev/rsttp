@@ -1,10 +1,12 @@
 use std::{collections::HashMap, error::Error, fmt, str::FromStr};
 
-use crate::config::HttpProtocol;
+use tracing::instrument;
+
+use crate::{config::HttpProtocol, router::path::Path};
 
 use super::header::HttpHeader;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ReqType {
     Get,
     Post,
@@ -85,7 +87,7 @@ impl Error for MessageEncodingParseError {}
 #[derive(Debug)]
 pub struct Request {
     pub req_type: ReqType,
-    pub path: String,
+    pub path: Path,
     pub protocol: HttpProtocol,
     pub headers: HashMap<String, String>,
     pub body: String,
@@ -93,24 +95,24 @@ pub struct Request {
 }
 
 impl Request {
+    #[instrument]
     pub fn new(data: &str) -> Result<Request, String> {
         let split_data: Vec<&str> = data.split("\r\n").collect();
 
         if split_data.is_empty() {
-            return Err(String::from("Empty data found"));
+            return Err(String::from("Empty Request Metadata"));
         }
-
-        println!("split data: {:?}", split_data);
 
         let req_info: &str = split_data[0];
 
         let req_info_split: Vec<&str> = req_info.split(' ').collect();
         if req_info_split.len() != 3 {
-            return Err(String::from("Malformed Request Details"));
+            return Err(String::from("Malformed Request Metadata"));
         }
 
         let req_type: ReqType = ReqType::from_str(req_info_split[0]).map_err(|e| e.to_string())?;
-        let req_target: String = extract_path_from_req_target(req_info_split[1])?;
+        let req_target: Path = Path::parse(&extract_path_from_req_target(req_info_split[1])?)
+            .map_err(|e| e.to_string())?;
         let req_protocol: HttpProtocol =
             HttpProtocol::from_str(req_info_split[2]).map_err(|e| e.to_string())?;
 
@@ -179,8 +181,6 @@ fn extract_path_from_req_target(req_target: &str) -> Result<String, String> {
         s if s.contains(":") && !s.contains("/") => RequestTargetForms::Authority,
         _ => return Err(String::from("Malformed request target form")),
     };
-
-    println!("Form match is: {:?}", form);
 
     match form {
         RequestTargetForms::Origin => Ok(String::from(req_target)),

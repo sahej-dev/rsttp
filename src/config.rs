@@ -1,11 +1,12 @@
 use std::{error::Error, fmt, str::FromStr};
 
-pub struct Config {
+#[derive(Debug)]
+pub struct Config<Ctx: Send + Sync> {
     pub port: i32,
-    pub static_files_dir: String,
+    pub ctx: Ctx,
 }
 
-impl Config {
+impl<Ctx: Send + Sync> Config<Ctx> {
     pub fn addr(&self) -> String {
         format!("127.0.0.1:{}", self.port)
     }

@@ -4,10 +4,12 @@ use std::io::Write;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use tracing::info;
 
 use super::{AcceptedEncoding, Request, header::HttpHeader};
 use crate::config::HttpProtocol;
 
+#[derive(Debug)]
 pub enum HttpResponseCode {
     R200,
     R201,
@@ -39,6 +41,7 @@ impl fmt::Display for HttpResponseCode {
     }
 }
 
+#[derive(Debug)]
 pub enum ContentType {
     TextPlain,
     ApplicationOctectStream,
@@ -63,12 +66,44 @@ impl HttpHeader for ContentType {
     }
 }
 
+#[derive(Debug)]
+pub enum ContentEcoding {
+    Gzip,
+}
+
+impl ContentEcoding {
+    fn from_accept_encoding(accept_encoding: &AcceptedEncoding) -> Option<Self> {
+        match accept_encoding {
+            AcceptedEncoding::Gzip => Some(ContentEcoding::Gzip),
+        }
+    }
+}
+
+impl HttpHeader for ContentEcoding {
+    fn key(&self) -> &str {
+        "Content-Encoding"
+    }
+
+    fn val(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for ContentEcoding {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Gzip => write!(f, "gzip"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Response {
     protocol: HttpProtocol,
     code: HttpResponseCode,
     headers: HashMap<String, String>,
     body: Option<String>,
-    content_encoding: Option<AcceptedEncoding>,
+    content_encoding: Option<ContentEcoding>,
     content_type: ContentType,
 }
 
@@ -112,14 +147,14 @@ impl Response {
             content_encoding: if req.accept_encodings.is_empty() {
                 None
             } else {
-                Some(req.accept_encodings[0].clone())
+                ContentEcoding::from_accept_encoding(&req.accept_encodings[0])
             },
         }
     }
 
     pub fn write_to<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
         let (body_bytes, body_len) = match (&self.body, &self.content_encoding) {
-            (Some(body), Some(AcceptedEncoding::Gzip)) => {
+            (Some(body), Some(ContentEcoding::Gzip)) => {
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
 
                 if encoder.write_all(body.as_bytes()).is_err() {
@@ -128,7 +163,7 @@ impl Response {
                     match encoder.finish() {
                         Ok(cmprsd_bytes) => {
                             let n: usize = cmprsd_bytes.len();
-                            println!("compressed_bytes: {:?}", cmprsd_bytes);
+                            info!(compressed_bytes = ?cmprsd_bytes);
                             (cmprsd_bytes, n)
                         }
                         Err(_) => (body.as_bytes().to_vec(), body.len()),
