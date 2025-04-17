@@ -29,7 +29,7 @@ fn setup_routes(router: &mut Router<AppContext>) -> Result<(), PathParseError> {
     })?;
 
     router.get("/echo/:text", |req, params, _| {
-        if let Some(text) = params.and_then(|p| p.get("text").map(|s| s.to_owned())) {
+        if let Some(text) = get_param!(params, "text") {
             Response::new(
                 req,
                 HttpResponseCode::R200,
@@ -43,7 +43,7 @@ fn setup_routes(router: &mut Router<AppContext>) -> Result<(), PathParseError> {
     })?;
 
     router.get("/files/:path", |req, params, ctx| {
-        if let Some(path) = params.and_then(|p| p.get("path").map(|s| s.to_owned())) {
+        if let Some(path) = get_param!(params, "path") {
             let file_path: String = format!("{}/{}", ctx.static_files_dir, path);
             let file_content = fs::read_to_string(file_path);
             match file_content {
@@ -62,7 +62,7 @@ fn setup_routes(router: &mut Router<AppContext>) -> Result<(), PathParseError> {
     })?;
 
     router.post("/files/:path", |req, params, ctx| {
-        if let Some(path) = params.and_then(|p| p.get("path").map(|s| s.to_owned())) {
+        if let Some(path) = get_param!(params, "path") {
             let file_path: String = format!("{}/{}", ctx.static_files_dir, path);
             let _: Result<(), std::io::Error> = fs::create_dir_all(&ctx.static_files_dir);
 
@@ -83,6 +83,11 @@ fn setup_routes(router: &mut Router<AppContext>) -> Result<(), PathParseError> {
     })?;
 
     Ok(())
+}
+
+#[macro_export]
+macro_rules! get_param {
+    ( $opts:expr, $key:expr ) => {{ $opts.as_ref().and_then(|m| m.get($key)).cloned() }};
 }
 
 #[derive(Debug)]
