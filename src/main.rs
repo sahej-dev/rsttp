@@ -11,6 +11,7 @@ mod config;
 mod http;
 mod router;
 mod rsttp_server;
+mod thread_pool;
 
 fn setup_routes(router: &mut Router<AppContext>) -> Result<(), PathParseError> {
     router.get("/", |_req, _, _| Response::success())?;
@@ -117,7 +118,7 @@ fn main() {
 
     let _ = setup_routes(&mut router);
 
-    let server: RsttpServer<AppContext> = RsttpServer { config, router };
+    let server: RsttpServer<AppContext> = RsttpServer::new(config, router, 8);
 
     let server: Arc<RsttpServer<AppContext>> = Arc::new(server);
 

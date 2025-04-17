@@ -7,14 +7,24 @@ use tracing::{error, info, instrument};
 use crate::config::Config;
 use crate::http::{Request, Response};
 use crate::router::Router;
+use crate::thread_pool::ThreadPool;
 
 #[derive(Debug)]
 pub struct RsttpServer<Ctx: Send + Sync + std::fmt::Debug + 'static> {
     pub config: Config<Ctx>,
     pub router: Router<Ctx>,
+    thread_pool: ThreadPool,
 }
 
 impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
+    pub fn new(config: Config<Ctx>, router: Router<Ctx>, thread_count: usize) -> RsttpServer<Ctx> {
+        RsttpServer {
+            config,
+            router,
+            thread_pool: ThreadPool::new(thread_count),
+        }
+    }
+
     #[instrument]
     pub fn listen(self: Arc<Self>) {
         match TcpListener::bind(self.addr_as_string()) {
@@ -24,7 +34,7 @@ impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
 
                     match stream {
                         Ok(stream) => {
-                            std::thread::spawn(move || {
+                            self.thread_pool.execute(move || {
                                 server.tcp_event_handler(&stream, &server);
                             });
                         }
