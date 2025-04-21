@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 use std::{env, fs};
 
 use config::Config;
@@ -97,7 +98,7 @@ struct AppContext {
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    // tracing_subscriber::fmt::init();
 
     let default_file_dir: String = String::from("files/");
     let args: Vec<String> = env::args().collect();
@@ -112,7 +113,11 @@ fn main() {
         static_files_dir: files_dir,
     };
 
-    let config: Config<AppContext> = Config { port: 2000, ctx };
+    let config: Config<AppContext> = Config {
+        port: 4221,
+        ctx,
+        persist_connection_for: Duration::from_secs(5),
+    };
 
     let mut router: Router<AppContext> = Router::new();
 

@@ -163,6 +163,14 @@ impl Request {
     pub fn header_val(&self, header_key: &str) -> Option<&String> {
         self.headers.get(header_key.to_lowercase().as_str())
     }
+
+    pub fn has_connection_close_header(&self) -> bool {
+        if let Some(val) = self.header_val("Connection") {
+            return val == "close";
+        }
+
+        false
+    }
 }
 
 #[derive(PartialEq, Debug)]

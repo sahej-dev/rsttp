@@ -1,9 +1,10 @@
-use std::{error::Error, fmt, str::FromStr};
+use std::{error::Error, fmt, str::FromStr, time::Duration};
 
 #[derive(Debug)]
 pub struct Config<Ctx: Send + Sync> {
     pub port: i32,
     pub ctx: Ctx,
+    pub persist_connection_for: Duration,
 }
 
 impl<Ctx: Send + Sync> Config<Ctx> {

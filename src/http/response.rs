@@ -138,7 +138,7 @@ impl Response {
         content_type: ContentType,
         protocol: HttpProtocol,
     ) -> Response {
-        Response {
+        let mut res = Response {
             protocol,
             code,
             headers: HashMap::new(),
@@ -149,7 +149,13 @@ impl Response {
             } else {
                 ContentEcoding::from_accept_encoding(&req.accept_encodings[0])
             },
+        };
+
+        if req.has_connection_close_header() {
+            res.add_header(String::from("Connection"), String::from("close"));
         }
+
+        res
     }
 
     pub fn write_to<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
@@ -195,5 +201,9 @@ impl Response {
         writer.write_all(&body_bytes)?;
 
         Ok(())
+    }
+
+    fn add_header(&mut self, key: String, val: String) {
+        self.headers.insert(key, val);
     }
 }
