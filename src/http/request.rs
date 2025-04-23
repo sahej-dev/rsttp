@@ -1,5 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt, str::FromStr};
 
+use thiserror::Error;
 use tracing::instrument;
 
 use crate::{config::HttpProtocol, router::path::Path};
@@ -96,25 +97,30 @@ pub struct Request {
 
 impl Request {
     #[instrument]
-    pub fn new(data: &str) -> Result<Request, String> {
+    pub fn new(data: &str) -> Result<Request, RequestParseError> {
         let split_data: Vec<&str> = data.split("\r\n").collect();
 
         if split_data.is_empty() {
-            return Err(String::from("Empty Request Metadata"));
+            return Err(RequestParseError::EmptyMetadata);
         }
 
         let req_info: &str = split_data[0];
 
         let req_info_split: Vec<&str> = req_info.split(' ').collect();
         if req_info_split.len() != 3 {
-            return Err(String::from("Malformed Request Metadata"));
+            return Err(RequestParseError::MalformedMetadata);
         }
 
-        let req_type: ReqType = ReqType::from_str(req_info_split[0]).map_err(|e| e.to_string())?;
-        let req_target: Path = Path::parse(&extract_path_from_req_target(req_info_split[1])?)
-            .map_err(|e| e.to_string())?;
-        let req_protocol: HttpProtocol =
-            HttpProtocol::from_str(req_info_split[2]).map_err(|e| e.to_string())?;
+        let req_type: ReqType = ReqType::from_str(req_info_split[0])
+            .map_err(|e| RequestParseError::TypeParseError(e.to_string()))?;
+        let req_target: Path = Path::parse(
+            &extract_path_from_req_target(req_info_split[1])
+                .map_err(RequestParseError::TargetParseError)?,
+        )
+        .map_err(|e| RequestParseError::TargetParseError(e.to_string()))?;
+
+        let req_protocol: HttpProtocol = HttpProtocol::from_str(req_info_split[2])
+            .map_err(|e| RequestParseError::ProtocolParseError(e.to_string()))?;
 
         let mut req_headers: HashMap<String, String> = HashMap::new();
 
@@ -187,7 +193,9 @@ fn extract_path_from_req_target(req_target: &str) -> Result<String, String> {
         s if s.starts_with("http") => RequestTargetForms::Absolute,
         s if s.starts_with("/") => RequestTargetForms::Origin,
         s if s.contains(":") && !s.contains("/") => RequestTargetForms::Authority,
-        _ => return Err(String::from("Malformed request target form")),
+        _ => {
+            return Err(String::from("Malformed request target form"));
+        }
     };
 
     match form {
@@ -225,4 +233,22 @@ fn extract_path_from_req_target(req_target: &str) -> Result<String, String> {
         }
         RequestTargetForms::Asterisk => Ok(String::from("*")),
     }
+}
+
+#[derive(Error, Debug)]
+pub enum RequestParseError {
+    #[error("Empty request metadta")]
+    EmptyMetadata,
+
+    #[error("Malformed request metadata")]
+    MalformedMetadata,
+
+    #[error("Request type parse error: {0}")]
+    TypeParseError(String),
+
+    #[error("Request target parse error: {0}")]
+    TargetParseError(String),
+
+    #[error("Request protocol parse error: {0}")]
+    ProtocolParseError(String),
 }

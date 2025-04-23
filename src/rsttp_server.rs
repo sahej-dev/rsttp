@@ -3,6 +3,7 @@ use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
+use thiserror::Error;
 use tracing::{error, info, instrument};
 
 use crate::config::Config;
@@ -37,13 +38,8 @@ impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
 
                     match stream {
                         Ok(stream) => {
-                            println!("stream: {:?}", stream);
-
                             if let Ok(addr) = stream.peer_addr() {
-                                println!("socket: {}", addr);
-
                                 if let Ok(mut connections) = self.peer_connections.lock() {
-                                    println!("got connections lock: {}", addr);
                                     if connections.get(&addr).is_none() {
                                         connections.insert(addr, stream);
                                     }
@@ -74,7 +70,7 @@ impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
     fn respond(stream: &TcpStream, response: Response) {
         match response.write_to(stream) {
             Ok(_) => {
-                println!("Written to stream");
+                info!("successful response");
             }
             Err(e) => match e.kind() {
                 std::io::ErrorKind::BrokenPipe => {
@@ -92,8 +88,6 @@ impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
 
     #[instrument]
     fn tcp_event_handler(&self, socket_addr: SocketAddr, server: &RsttpServer<Ctx>) {
-        println!("handling for {}", socket_addr);
-
         let stream = if let Ok(mut connections) = self.peer_connections.lock() {
             match connections.get(&socket_addr) {
                 Some(stream) => {
@@ -128,10 +122,13 @@ impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
             let req = match self.get_request_from_stream(&stream) {
                 Ok(req) => req,
                 Err(e) => {
-                    if e != "Connection closed by client" {
-                        println!("bad request at error: {}", e);
-                        Self::respond(&stream, Response::bad_request());
-                    }
+                    match e {
+                        RequestProcessingError::ConnectionTimeout
+                        | RequestProcessingError::ClientDisconnected => (),
+                        _ => {
+                            Self::respond(&stream, Response::bad_request());
+                        }
+                    };
                     break;
                 }
             };
@@ -148,24 +145,43 @@ impl<Ctx: Send + Sync + std::fmt::Debug> RsttpServer<Ctx> {
         }
     }
 
-    fn get_request_from_stream(&self, mut stream: &TcpStream) -> Result<Request, String> {
+    fn get_request_from_stream(
+        &self,
+        mut stream: &TcpStream,
+    ) -> Result<Request, RequestProcessingError> {
         let mut read_data: [u8; 8192] = [0; 8192];
         let bytes_read: usize = match stream.read(&mut read_data) {
-            Ok(0) => return Err(String::from("Connection closed by client")),
+            Ok(0) => return Err(RequestProcessingError::ClientDisconnected),
             Ok(n) => n,
             Err(e) => match e.kind() {
                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                    return Err(String::from("Connection timed out"));
+                    return Err(RequestProcessingError::ConnectionTimeout);
                 }
-                _ => return Err(format!("IO error: {}", e)),
+                _ => return Err(RequestProcessingError::UnknownIOError),
             },
         };
 
-        let read_data: &str =
-            std::str::from_utf8(&read_data[..bytes_read]).map_err(|e| e.to_string())?;
+        let read_data: &str = std::str::from_utf8(&read_data[..bytes_read])?;
 
-        println!("read data\n\n{}\n\n", read_data);
-
-        Request::new(read_data).map_err(|e| e.to_string())
+        Request::new(read_data)
+            .map_err(|e| RequestProcessingError::RequestParsingError(e.to_string()))
     }
+}
+
+#[derive(Error, Debug)]
+enum RequestProcessingError {
+    #[error("Connection closed by client")]
+    ClientDisconnected,
+
+    #[error("Connection timed out")]
+    ConnectionTimeout,
+
+    #[error("Unknown IO error")]
+    UnknownIOError,
+
+    #[error("Failure to convert bytes to string")]
+    UnableToConvertBytesToString(#[from] std::str::Utf8Error),
+
+    #[error("Failed to parse request: {0}")]
+    RequestParsingError(String),
 }
